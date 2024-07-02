@@ -85,6 +85,9 @@
 #include "hw/char/pl011.h"
 #include "qemu/guest-random.h"
 
+#include "hw/misc/banana_rom.h"
+#include "hw/gpio/custom_gpio.h"
+
 static GlobalProperty arm_virt_compat[] = {
     { TYPE_VIRTIO_IOMMU_PCI, "aw-bits", "48" },
 };
@@ -166,6 +169,8 @@ static const MemMapEntry base_memmap[] = {
     /* This redistributor space allows up to 2*64kB*123 CPUs */
     [VIRT_GIC_REDIST] =         { 0x080A0000, 0x00F60000 },
     [VIRT_UART] =               { 0x09000000, 0x00001000 },
+    [VIRT_BANANA_ROM] =         { 0x09002000, 0x00001000 },
+    [VIRT_CUSTOM_GPIO] =        { 0x09003000, 0x00001000 },
     [VIRT_RTC] =                { 0x09010000, 0x00001000 },
     [VIRT_FW_CFG] =             { 0x09020000, 0x00000018 },
     [VIRT_GPIO] =               { 0x09030000, 0x00001000 },
@@ -222,6 +227,7 @@ static const int a15irqmap[] = {
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
     [VIRT_PLATFORM_BUS] = 112, /* ...to 112 + PLATFORM_BUS_NUM_IRQS -1 */
+    [VIRT_CUSTOM_GPIO] = 176,
 };
 
 static void create_randomness(MachineState *ms, const char *node)
@@ -231,12 +237,50 @@ static void create_randomness(MachineState *ms, const char *node)
         uint8_t rng[32];
     } seed;
 
-    if (qemu_guest_getrandom(&seed, sizeof(seed), NULL)) {
+if (qemu_guest_getrandom(&seed, sizeof(seed), NULL)) {
         return;
     }
     qemu_fdt_setprop_u64(ms->fdt, node, "kaslr-seed", seed.kaslr);
     qemu_fdt_setprop(ms->fdt, node, "rng-seed", seed.rng, sizeof(seed.rng));
 }
+
+//MARK: CRAETE CUSTOM GPIO
+static void create_custom_gpio(VirtMachineState *vms)
+{  
+    char *nodename;
+    MachineState *ms = MACHINE(vms);
+    hwaddr base = vms->memmap[VIRT_CUSTOM_GPIO].base;
+    hwaddr size = vms->memmap[VIRT_CUSTOM_GPIO].size;
+    int irq = vms->irqmap[VIRT_CUSTOM_GPIO];
+    const char compat[] = "custom_gpio";
+
+
+
+    //DeviceState* custom_dev=sysbus_create_simple("custom_gpio", base, qdev_get_gpio_in(vms->gic, irq));
+
+    sysbus_create_simple("custom_gpio", base, qdev_get_gpio_in(vms->gic, irq));
+
+
+    // DeviceState *dev = qdev_new(TYPE_CUSTOM_GPIO);
+    // sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    // sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, qdev_get_gpio_in(vms->gic, irq));
+
+    nodename = g_strdup_printf("/gpio@%" PRIx64, base);
+    qemu_fdt_add_subnode(ms->fdt, nodename);
+    qemu_fdt_setprop(ms->fdt, nodename, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
+                                 2, base, 2, size);
+    qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI, irq,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    qemu_fdt_setprop_cell(ms->fdt, nodename, "clocks", vms->clock_phandle);
+    qemu_fdt_setprop_string(ms->fdt, nodename, "clock-names", "apb_pclk");
+    g_free(nodename);
+}
+
+
+
+
 
 /*
  * The CPU object always exposes the NS EL2 virt timer IRQ line,
@@ -2324,6 +2368,15 @@ static void machvirt_init(MachineState *machine)
      * no backend is created the transport will just sit harmlessly idle.
      */
     create_virtio_devices(vms);
+    
+
+    banana_rom_create(vms->memmap[VIRT_BANANA_ROM].base);
+    //custom_gpio_create(vms->memmap[VIRT_CUSTOM_GPIO].base);
+    printf("----->Creating custom gpio...\n");
+    create_custom_gpio(vms);
+    printf("----->Done!...\n");
+
+
 
     vms->fw_cfg = create_fw_cfg(vms, &address_space_memory);
     rom_set_fw(vms->fw_cfg);

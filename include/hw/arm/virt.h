@@ -60,6 +60,8 @@ enum {
     VIRT_GIC_REDIST,
     VIRT_SMMU,
     VIRT_UART,
+    VIRT_BANANA_ROM,
+    VIRT_CUSTOM_GPIO,
     VIRT_MMIO,
     VIRT_RTC,
     VIRT_FW_CFG,

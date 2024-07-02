@@ -33,6 +33,17 @@ config ARM_VIRT
     select VIRTIO_MEM_SUPPORTED
     select ACPI_CXL
     select ACPI_HMAT
+    select MPC8XXX_GPIO
+    select BANANA_ROM
+    select CUSTOM_GPIO
+
+
+config CUSTOM_GPIO
+    bool
+
+config MPC8XXX_GPIO
+    bool
+
 
 config CHEETAH
     bool
