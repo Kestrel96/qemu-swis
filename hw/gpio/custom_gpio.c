@@ -10,43 +10,48 @@
 
 static const VMStateDescription vmstate_custom_gpio = {
     .name = "custom_gpio",
-
     .fields = (const VMStateField[]){
-        VMSTATE_UINT32(reg, CUSTOM_GPIOState),
-        VMSTATE_END_OF_LIST()}};
+        VMSTATE_STRUCT(regs, CUSTOM_GPIOState, 0, vmstate_custom_gpio, c_gpio_regs),
+        VMSTATE_END_OF_LIST()}
 
-static void irq_handler(void *opaque, int n, int level)
-{
-    // CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)opaque;
-    //  Perform actions needed when interrupt is triggered
-    printf("-----> Interrupt triggered\n");
-}
+};
+
+// static void irq_handler(void *opaque, int n, int level)
+// {
+//     // CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)opaque;
+//     //  Perform actions needed when interrupt is triggered
+//     printf("-----> Interrupt triggered\n");
+// }
+
+// static void custom_gpio_update(void *opaque);
 
 static uint64_t custom_gpio_read(void *opaque, hwaddr addr, unsigned int size)
 {
+    (void)size; // Don't use it, always 32 bit access.
 
     CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)opaque;
-    printf("Read called! (Addr: 0x%x)\n", (unsigned int)addr);
-    if (addr == 0x4)
-    {   
-        qemu_irq_lower(s->irq);
-        return 0xc0ffe;
-    }
-    if (addr == 0x8)
+    uint32_t *regs = (uint32_t *)&s->regs;
+    info("Read called! (Addr: 0x%x)\n", (unsigned int)addr);
+
+    // Some checks...
+    if (addr > sizeof(c_gpio_regs))
     {
-        printf("Trying to trigger interrupt...\n");
-        qemu_irq_raise(s->irq);
-        
-
-        
+        error("Requested read from too high address, returning 0x0!\n");
+        return 0x0;
     }
 
-        if (addr == 0x10)
-    {   
-        qemu_irq_lower(s->irq);
-        return 0xbaba;
+    if (addr % sizeof(uint32_t) != 0)
+    {
+        warning("Requested address is not aligned! (will read from 0x%x)\n",
+                (unsigned)(addr / sizeof(uint32_t)*sizeof(uint32_t)));
     }
-    return 0x1234;
+
+    // Treat struct as an array, compute index and return
+    // requested field...
+    uint32_t index = addr / sizeof(uint32_t);
+
+    uint32_t retval = regs[index];
+    return (uint64_t)retval;
 }
 
 static void custom_gpio_write(void *opaque, hwaddr offset,
@@ -56,17 +61,24 @@ static void custom_gpio_write(void *opaque, hwaddr offset,
     // CUSTOM_GPIOState *s = CUSTOM_GPIO(opaque);
 
     CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)opaque;
+    (void)s;
 
-    s->reg = (uint32_t)value;
     printf("Write called!\n");
 }
 
 static void custom_gpio_reset(DeviceState *dev)
 {
-
+    info("Reset called!\n");
     CUSTOM_GPIOState *s = CUSTOM_GPIO(dev);
+    uint32_t *regs = (uint32_t *)&s->regs;
 
-    s->reg = 0x54321;
+    for (uint32_t i = 0; i < sizeof(c_gpio_regs) / sizeof(uint32_t); i++)
+    {
+
+        regs[i] = i;
+    }
+
+    qemu_irq_lower(s->irq);
 }
 
 static const MemoryRegionOps custom_gpio_ops = {
@@ -89,7 +101,7 @@ static void custom_gpio_class_init(ObjectClass *class, void *data)
 static void custom_gpio_init(Object *obj)
 {
 
-    printf("-----> Init start\n");
+    info("Init start\n");
     DeviceState *dev = DEVICE(obj);
     CUSTOM_GPIOState *s = CUSTOM_GPIO(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
@@ -107,12 +119,16 @@ static void custom_gpio_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
 
     sysbus_init_irq(sbd, &s->irq);
-    qdev_init_gpio_in(dev, irq_handler, 32);
-    qdev_init_gpio_out(dev, s->out, 32);
 
+    custom_gpio_reset(dev);
+    (void)custom_gpio_read(dev, 0x100, 0x0);
+    (void)custom_gpio_read(dev, 0x3, 0x0);
+    (void)custom_gpio_read(dev, 0x7, 0x0);
+    info("Read: %x\n", (unsigned)custom_gpio_read(dev, 0x8, 0x0));
+    // qdev_init_gpio_in(dev, irq_handler, 32);
     (void)dev;
 
-    printf("-----> Init end\n");
+    info("Init end\n");
 }
 
 static const TypeInfo custom_gpio_info = {

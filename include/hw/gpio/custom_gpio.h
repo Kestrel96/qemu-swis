@@ -9,8 +9,24 @@
 #include "qemu/module.h"
 #include "qom/object.h"
 
+
+#define info(fmt, ...) printf("cgpio: " fmt, ##__VA_ARGS__)
+#define warning(fmt, ...) printf("cgpio: [WARNING] " fmt, ##__VA_ARGS__)
+#define error(fmt, ...) printf("cgpio: [ERROR] " fmt, ##__VA_ARGS__)
+
+
 #define TYPE_CUSTOM_GPIO "custom_gpio"
 OBJECT_DECLARE_SIMPLE_TYPE(CUSTOM_GPIOState, CUSTOM_GPIO)
+
+
+typedef struct custom_gpio_regs{
+    uint32_t gpio_cfg; // 0x0
+    uint32_t gpio_state; //0x4 and so on...
+    uint32_t irq_en;
+    uint32_t irq_sta;
+    uint32_t irq_clr;
+}c_gpio_regs;
+
 // This is the runtime state, describes current machine state.
 struct CUSTOM_GPIOState
 {
@@ -19,27 +35,14 @@ struct CUSTOM_GPIOState
 
     MemoryRegion iomem;
 
-    uint32_t reg;
+    c_gpio_regs regs;
 
     qemu_irq irq;
 
-    qemu_irq out[32];
 
 };
 
 
 DeviceState *custom_gpio_create(hwaddr addr);
-
-
-
-
-
-
-
-
-
-
-
-
 
 #endif /*CUSTOM_GPIO_H*/
