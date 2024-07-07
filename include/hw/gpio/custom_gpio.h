@@ -8,6 +8,9 @@
 #include "migration/vmstate.h"
 #include "qemu/module.h"
 #include "qom/object.h"
+#include "qemu/main-loop.h" /* iothread mutex */
+
+
 
 
 #define info(fmt, ...) printf("cgpio: " fmt, ##__VA_ARGS__)
@@ -39,8 +42,13 @@ struct CUSTOM_GPIOState
 
     qemu_irq irq;
 
-
+    QemuThread thread;
+    QemuMutex dat_lock;
+    int shm_fd;
+    char* sh_mem_base;
 };
+
+
 
 
 DeviceState *custom_gpio_create(hwaddr addr);

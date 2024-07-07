@@ -6,7 +6,19 @@
 #include "qemu/module.h"
 #include "qom/object.h"
 
+#include <mqueue.h>
+
+#include <semaphore.h>
+
 #include "include/hw/gpio/custom_gpio.h"
+
+#define SEM_NAME "/gpio_semaphore"
+static sem_t *sem;
+#define SHM_NAME "/gpio_shm"
+#define SHM_SIZE sizeof(c_gpio_regs)
+static char sh_data[SHM_SIZE];
+
+static void * remote_gpio_thread(void * arg);
 
 static const VMStateDescription vmstate_custom_gpio = {
     .name = "custom_gpio",
@@ -15,15 +27,6 @@ static const VMStateDescription vmstate_custom_gpio = {
         VMSTATE_END_OF_LIST()}
 
 };
-
-// static void irq_handler(void *opaque, int n, int level)
-// {
-//     // CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)opaque;
-//     //  Perform actions needed when interrupt is triggered
-//     printf("-----> Interrupt triggered\n");
-// }
-
-// static void custom_gpio_update(void *opaque);
 
 static uint64_t custom_gpio_read(void *opaque, hwaddr addr, unsigned int size)
 {
@@ -43,7 +46,7 @@ static uint64_t custom_gpio_read(void *opaque, hwaddr addr, unsigned int size)
     if (addr % sizeof(uint32_t) != 0)
     {
         warning("Requested address is not aligned! (will read from 0x%x)\n",
-                (unsigned)(addr / sizeof(uint32_t)*sizeof(uint32_t)));
+                (unsigned)(addr / sizeof(uint32_t) * sizeof(uint32_t)));
     }
 
     // Treat struct as an array, compute index and return
@@ -128,6 +131,49 @@ static void custom_gpio_init(Object *obj)
     // qdev_init_gpio_in(dev, irq_handler, 32);
     (void)dev;
 
+
+        // This is only for the case we kill QEMU and not unlink semaphore correctly.
+    if (!sem_unlink(SEM_NAME))
+    {
+        info("Semaphore unlinked successfully. (Probably left from killing QEMU)\n");
+    }
+
+
+    sem = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0666, 1);  // Start with 1 to allow first access
+    sem_trywait(sem);
+
+
+
+    // Create shared memory object
+    (void)sh_data;
+    s->shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+    if (s->shm_fd == -1)
+    {
+        perror("shm_open failed");
+        while (1)
+            ;
+    }
+
+    // Size the shared memory
+    int res = ftruncate(s->shm_fd, sizeof(sh_data));
+    (void)res;
+    // Map the shared memory
+    s->sh_mem_base = mmap(0, sizeof(sh_data), PROT_READ | PROT_WRITE, MAP_SHARED, s->shm_fd, 0);
+    if (s->sh_mem_base == MAP_FAILED)
+    {
+        perror("mmap failed");
+        while (1)
+            ;
+    }
+
+    memcpy(s->sh_mem_base,&s->regs,sizeof(sh_data));
+    sem_post(sem);
+
+    qemu_thread_create(&s->thread, "remote_gpio", remote_gpio_thread, s,
+                       QEMU_THREAD_JOINABLE);   
+
+
+
     info("Init end\n");
 }
 
@@ -139,6 +185,29 @@ static const TypeInfo custom_gpio_info = {
     .instance_init = custom_gpio_init,
     .class_init = custom_gpio_class_init,
 };
+
+
+//#MARK: THREAD
+static void * remote_gpio_thread(void * arg)
+{
+    info("Starting thread\n");
+    CUSTOM_GPIOState *s = (CUSTOM_GPIOState *) arg;
+    uint32_t j=0;
+    while(1){
+
+        sem_wait(sem);
+        s->regs.gpio_cfg = j;
+        j++;
+        memcpy(s->sh_mem_base,&s->regs,sizeof(sh_data));
+        sem_post(sem);
+
+    }
+
+    return NULL;
+
+}
+
+
 
 static void custom_gpio_register_types(void)
 {
