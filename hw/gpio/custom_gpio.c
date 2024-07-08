@@ -5,12 +5,16 @@
 #include "migration/vmstate.h"
 #include "qemu/module.h"
 #include "qom/object.h"
-
 #include <mqueue.h>
-
 #include <semaphore.h>
+#include <unistd.h>
+#include "qemu/main-loop.h" /* iothread mutex */
+#include <time.h>
 
+#include "qemu/thread.h"
 #include "include/hw/gpio/custom_gpio.h"
+
+unsigned int irq_count = 0;
 
 #define SEM_NAME "/gpio_semaphore"
 static sem_t *sem;
@@ -18,7 +22,8 @@ static sem_t *sem;
 #define SHM_SIZE sizeof(c_gpio_regs)
 static char sh_data[SHM_SIZE];
 
-static void * remote_gpio_thread(void * arg);
+static void *remote_gpio_thread(void *arg);
+static void custom_gpio_update_state(CUSTOM_GPIOState *s);
 
 static const VMStateDescription vmstate_custom_gpio = {
     .name = "custom_gpio",
@@ -35,6 +40,27 @@ static uint64_t custom_gpio_read(void *opaque, hwaddr addr, unsigned int size)
     CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)opaque;
     uint32_t *regs = (uint32_t *)&s->regs;
     info("Read called! (Addr: 0x%x)\n", (unsigned int)addr);
+
+    // printf("BGQL LOCKED: %u\n", (unsigned)bql_locked());
+    //  bql_unlock();
+
+    // printf("Trying to lock\n");
+    if (sem_trywait(sem) == 0)
+    {
+        qemu_irq_lower(s->irq);
+        printf("-------------------------\n");
+        irq_count++;
+        s->regs.gpio_cfg = 0;
+        memcpy(s->sh_mem_base, &s->regs, sizeof(sh_data));
+        custom_gpio_update_state(s);
+        printf("Realeased in read (time: %lu)\n", (unsigned long)qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+        printf("IRQ count: %u\n", irq_count);
+        printf("-------------------------\n");
+        sem_post(sem);
+        // printf("Sem posted \n");
+        return 0;
+    }
+    // printf("BGQL LOCKED: %u\n", (unsigned)bql_locked());
 
     // Some checks...
     if (addr > sizeof(c_gpio_regs))
@@ -124,25 +150,19 @@ static void custom_gpio_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
 
     custom_gpio_reset(dev);
-    (void)custom_gpio_read(dev, 0x100, 0x0);
-    (void)custom_gpio_read(dev, 0x3, 0x0);
-    (void)custom_gpio_read(dev, 0x7, 0x0);
-    info("Read: %x\n", (unsigned)custom_gpio_read(dev, 0x8, 0x0));
+
     // qdev_init_gpio_in(dev, irq_handler, 32);
     (void)dev;
 
-
-        // This is only for the case we kill QEMU and not unlink semaphore correctly.
+    qemu_mutex_init(&s->dat_lock);
+    // This is only for the case we kill QEMU and not unlink semaphore correctly.
     if (!sem_unlink(SEM_NAME))
     {
         info("Semaphore unlinked successfully. (Probably left from killing QEMU)\n");
     }
 
-
-    sem = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0666, 1);  // Start with 1 to allow first access
+    sem = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0666, 1); // Start with 1 to allow first access
     sem_trywait(sem);
-
-
 
     // Create shared memory object
     (void)sh_data;
@@ -166,13 +186,16 @@ static void custom_gpio_init(Object *obj)
             ;
     }
 
-    memcpy(s->sh_mem_base,&s->regs,sizeof(sh_data));
+    memcpy(s->sh_mem_base, &s->regs, sizeof(sh_data));
     sem_post(sem);
 
     qemu_thread_create(&s->thread, "remote_gpio", remote_gpio_thread, s,
-                       QEMU_THREAD_JOINABLE);   
+                       QEMU_THREAD_JOINABLE);
 
-
+    // (void)custom_gpio_read(dev, 0x100, 0x0);
+    // (void)custom_gpio_read(dev, 0x3, 0x0);
+    // (void)custom_gpio_read(dev, 0x7, 0x0);
+    // info("Read: %x\n", (unsigned)custom_gpio_read(dev, 0x8, 0x0));
 
     info("Init end\n");
 }
@@ -186,28 +209,52 @@ static const TypeInfo custom_gpio_info = {
     .class_init = custom_gpio_class_init,
 };
 
+static void custom_gpio_update_state(CUSTOM_GPIOState *s)
+{
 
-//#MARK: THREAD
-static void * remote_gpio_thread(void * arg)
+    // qemu_mutex_lock_iothread();
+
+    if (s->regs.gpio_cfg > 0)
+    {
+
+        while (bql_locked())
+            ;
+        if (!bql_locked())
+        {
+            bql_lock();
+            qemu_irq_raise(s->irq);
+            bql_unlock();
+
+            // printf("Locked \n");
+        }
+
+        // printf("Done...\n");
+        // bql_unlock();
+        //  info("Interrupt!\n");
+    }
+
+    // qemu_mutex_unlock_iothread();
+}
+
+// #MARK: THREAD
+static void *remote_gpio_thread(void *arg)
 {
     info("Starting thread\n");
-    CUSTOM_GPIOState *s = (CUSTOM_GPIOState *) arg;
-    uint32_t j=0;
-    while(1){
+    CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)arg;
+
+    while (1)
+    {
 
         sem_wait(sem);
-        s->regs.gpio_cfg = j;
-        j++;
-        memcpy(s->sh_mem_base,&s->regs,sizeof(sh_data));
+        memcpy(&s->regs, s->sh_mem_base, sizeof(sh_data));
+        memcpy(s->sh_mem_base, &s->regs, sizeof(sh_data));
+        custom_gpio_update_state(s);
         sem_post(sem);
-
+        g_usleep(10);
     }
 
     return NULL;
-
 }
-
-
 
 static void custom_gpio_register_types(void)
 {
