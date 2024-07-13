@@ -19,8 +19,9 @@ unsigned int irq_count = 0;
 #define SEM_NAME "/gpio_semaphore"
 static sem_t *sem;
 #define SHM_NAME "/gpio_shm"
-#define SHM_SIZE sizeof(c_gpio_regs)
+#define SHM_SIZE sizeof(sh_mem_struct)
 static char sh_data[SHM_SIZE];
+static uint32_t qemu_indicator = 0;
 
 static void *remote_gpio_thread(void *arg);
 static void custom_gpio_update_state(CUSTOM_GPIOState *s);
@@ -163,7 +164,6 @@ static void custom_gpio_init(Object *obj)
 
     sem = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0666, 1); // Start with 1 to allow first access
     sem_trywait(sem);
-
     // Create shared memory object
     (void)sh_data;
     s->shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
@@ -174,7 +174,8 @@ static void custom_gpio_init(Object *obj)
             ;
     }
 
-    // Size the shared memory
+    // TODO: Error handling
+    //  Size the shared memory
     int res = ftruncate(s->shm_fd, sizeof(sh_data));
     (void)res;
     // Map the shared memory
@@ -271,3 +272,41 @@ type_init(custom_gpio_register_types)
 
     return dev;
 }
+
+// typedef struct custom_gpio_regs{
+//     uint32_t gpio_cfg; // 0x0
+//     uint32_t gpio_state; //0x4 and so on...
+//     uint32_t irq_en;
+//     uint32_t irq_sta;
+//     uint32_t irq_clr;
+// }c_gpio_regs;
+
+// #MARK: State update
+static void analyze_input_pin(uint32_t pin, CUSTOM_GPIOState *s)
+{
+
+    c_gpio_regs *regs = &s->regs;
+    bool state = GET_BIT(pin, regs->gpio_state);
+    bool irq_en = GET_BIT(pin, regs->irq_en);
+    bool clr = GET_BIT(pin, regs->irq_clr);
+    // Check state
+
+    // Check irq_clr
+    if (clr)
+    {
+        regs->irq_sta &= ~(0x1 << pin);
+        qemu_irq_lower(s->irq);
+    }
+    // Check IRQ EN?
+    // If IRQ enabled raise interrupt and set sta flag
+    if (state && irq_en)
+    {
+        regs->irq_sta |= (0x1 << pin);
+        qemu_irq_raise(s->irq);
+    }
+};
+static void analyze_output_pin(bool state, uint32_t pin, CUSTOM_GPIOState *s)
+{
+
+    s->regs.gpio_state &= ~((0x1 & state) << pin);
+};

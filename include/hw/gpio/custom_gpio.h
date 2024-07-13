@@ -10,7 +10,7 @@
 #include "qom/object.h"
 #include "qemu/main-loop.h" /* iothread mutex */
 
-
+#define GET_BIT(offset,reg) (bool)(reg >> offset) & 0x1
 
 
 #define info(fmt, ...) printf("cgpio: " fmt, ##__VA_ARGS__)
@@ -29,6 +29,11 @@ typedef struct custom_gpio_regs{
     uint32_t irq_sta;
     uint32_t irq_clr;
 }c_gpio_regs;
+
+typedef struct sh_mem_struct{
+    uint32_t update_indicator;
+    c_gpio_regs regs;
+}sh_mem_struct;
 
 // This is the runtime state, describes current machine state.
 struct CUSTOM_GPIOState
