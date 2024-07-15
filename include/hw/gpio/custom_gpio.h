@@ -10,7 +10,7 @@
 #include "qom/object.h"
 #include "qemu/main-loop.h" /* iothread mutex */
 
-#define GET_BIT(offset,reg) (bool)(reg >> offset) & 0x1
+#define GET_BIT(offset,reg) (bool)((reg >> offset) & 0x1)
 
 
 #define info(fmt, ...) printf("cgpio: " fmt, ##__VA_ARGS__)
@@ -44,11 +44,12 @@ struct CUSTOM_GPIOState
     MemoryRegion iomem;
 
     c_gpio_regs regs;
+    uint32_t outputs;
 
     qemu_irq irq;
+    qemu_irq out[32];
 
     QemuThread thread;
-    QemuMutex dat_lock;
     int shm_fd;
     char* sh_mem_base;
 };

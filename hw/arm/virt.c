@@ -254,16 +254,7 @@ static void create_custom_gpio(VirtMachineState *vms)
     int irq = vms->irqmap[VIRT_CUSTOM_GPIO];
     const char compat[] = "custom_gpio";
 
-
-
-    //DeviceState* custom_dev=sysbus_create_simple("custom_gpio", base, qdev_get_gpio_in(vms->gic, irq));
-
     sysbus_create_simple("custom_gpio", base, qdev_get_gpio_in(vms->gic, irq));
-
-
-    // DeviceState *dev = qdev_new(TYPE_CUSTOM_GPIO);
-    // sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-    // sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, qdev_get_gpio_in(vms->gic, irq));
 
     nodename = g_strdup_printf("/gpio@%" PRIx64, base);
     qemu_fdt_add_subnode(ms->fdt, nodename);
