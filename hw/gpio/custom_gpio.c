@@ -20,7 +20,6 @@ unsigned int irq_count = 0;
 
 #define SEM_NAME "/gpio_semaphore"
 static sem_t *sem;
-static sem_t *rw_sem;
 #define SHM_NAME "/gpio_shm"
 #define SHM_SIZE sizeof(sh_mem_struct)
 static char sh_data[SHM_SIZE];
@@ -42,6 +41,8 @@ static const VMStateDescription vmstate_custom_gpio = {
 static uint64_t custom_gpio_read(void *opaque, hwaddr addr, unsigned int size)
 {
 
+
+    sem_wait(sem);
     (void)size; // Don't use it, always 32 bit access.
 
     CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)opaque;
@@ -66,10 +67,9 @@ static uint64_t custom_gpio_read(void *opaque, hwaddr addr, unsigned int size)
     uint32_t index = addr / sizeof(uint32_t);
     uint32_t retval = regs[index];
 
-    printf("retval: %u, address:  %u, index: %u\n", retval, (uint32_t)addr, index);
+    info("retval: %u, address:  %u, index: %u\n", retval, (uint32_t)addr, index);
 
     sem_post(sem);
-    sem_post(rw_sem);
     return (uint64_t)retval;
 }
 
@@ -77,12 +77,9 @@ static void custom_gpio_write(void *opaque, hwaddr offset,
                               uint64_t value, unsigned size)
 
 {
-
-    sem_wait(rw_sem);
     sem_wait(sem);
 
-    
-    printf("Write called! address: %u, size: %u, value: %u \n",
+    info("Write called! address: %u, size: %u, value: %u \n",
            (unsigned int)offset, (unsigned int)size, (unsigned int)value);
     (void)size;
     CUSTOM_GPIOState *s = (CUSTOM_GPIOState *)opaque;
@@ -105,9 +102,7 @@ static void custom_gpio_write(void *opaque, hwaddr offset,
     uint32_t index = offset / sizeof(uint32_t);
 
     regs[index] = (uint32_t)value;
-
     sem_post(sem);
-    sem_post(rw_sem);
 }
 
 static void custom_gpio_reset(DeviceState *dev)
@@ -148,7 +143,7 @@ static void custom_gpio_class_init(ObjectClass *class, void *data)
 
 static void placeholder_handler(void *opaque, int irq, int level)
 {
-    printf("IRQ HANDLER QEMU\n");
+    info("IRQ HANDLER QEMU\n");
 }
 
 static void custom_gpio_init(Object *obj)
@@ -182,13 +177,8 @@ static void custom_gpio_init(Object *obj)
         info("Semaphore unlinked successfully. (Probably left from killing QEMU)\n");
     }
 
-    if (!sem_unlink("RW_SEM"))
-    {
-        info("Semaphore unlinked successfully. (Probably left from killing QEMU)\n");
-    }
 
     sem = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0666, 1);
-    rw_sem = sem_open("RW_SEM", O_CREAT | O_EXCL, 0666, 1);
     // sem_trywait(sem);
     //  Create shared memory object
     s->shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
@@ -216,7 +206,6 @@ static void custom_gpio_init(Object *obj)
     s->regs.gpio_state = 0x0;
     memcpy(s->sh_mem_base, &s->regs, sizeof(sh_data));
     sem_post(sem);
-    sem_post(rw_sem);
 
     qemu_thread_create(&s->thread, "remote_gpio", remote_gpio_thread, s,
                        QEMU_THREAD_JOINABLE);
@@ -242,7 +231,7 @@ static void custom_gpio_update_state(CUSTOM_GPIOState *s, uint32_t *update_indic
     // Check if state was changed by remote
     if (shared_indicator != *update_indicator)
     {
-        printf("Updating state from remote! (%lu)\n", (unsigned long)qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+        info("Updating state from remote! (%lu)\n", (unsigned long)qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
         memcpy(&s->regs, s->sh_mem_base + 4, sizeof(c_gpio_regs));
     }
 
@@ -267,7 +256,6 @@ static void custom_gpio_update_state(CUSTOM_GPIOState *s, uint32_t *update_indic
                 analyze_output_pin(GET_BIT(pin, s->outputs), pin, s);
             }
         }
-        // TODO: those are char pointers so they dont add 0x4
         memcpy(s->sh_mem_base + 4, regs, sizeof(c_gpio_regs));
         s->prev_state = s->regs.gpio_state;
 
@@ -283,17 +271,10 @@ static void *remote_gpio_thread(void *arg)
 
     while (1)
     {
-        // printf("thread try lock\n");
-        if (sem_trywait(rw_sem) == 0)
-        {
-            // printf("thread locking\n");
-            sem_wait(sem);
-            custom_gpio_update_state(s, &qemu_indicator);
-            // printf("posting sem\n");
-            sem_post(sem);
-            // printf("posting rw");
-            sem_post(rw_sem);
-        }
+
+        sem_wait(sem);
+        custom_gpio_update_state(s, &qemu_indicator);
+        sem_post(sem);
         g_usleep(10);
     }
 
@@ -317,7 +298,6 @@ type_init(custom_gpio_register_types)
 }
 
 // #MARK: State update
-// TODO: IRQ on rising edge.
 static void analyze_input_pin(uint32_t pin, CUSTOM_GPIOState *s)
 {
     c_gpio_regs *regs = &s->regs;
@@ -338,13 +318,11 @@ static void analyze_input_pin(uint32_t pin, CUSTOM_GPIOState *s)
 
     // Check IRQ EN?
     // If IRQ enabled raise interrupt and set sta flag
-
     bool rising_edge = (prev_state == false && state == true) ? true : false;
     if ((rising_edge && irq_en) || sta)
     {
         regs->irq_sta |= (0x1 << pin);
         qemu_irq_raise(s->irq);
-        // printf("Raising IRQ! (pin:%u,state: %u, en: %u, sta: %u) \n", pin, state, irq_en, regs->irq_sta);
     }
 };
 static void analyze_output_pin(bool state, uint32_t pin, CUSTOM_GPIOState *s)
