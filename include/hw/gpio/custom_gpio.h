@@ -44,6 +44,7 @@ struct CUSTOM_GPIOState
     MemoryRegion iomem;
 
     c_gpio_regs regs;
+    uint32_t prev_state;
     uint32_t outputs;
 
     qemu_irq irq;
