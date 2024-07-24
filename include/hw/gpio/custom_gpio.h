@@ -45,7 +45,6 @@ struct CUSTOM_GPIOState
 
     c_gpio_regs regs;
     uint32_t prev_state;
-    uint32_t outputs;
 
     qemu_irq irq;
     qemu_irq out[32];

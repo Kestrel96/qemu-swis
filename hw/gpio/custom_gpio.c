@@ -113,8 +113,11 @@ static void custom_gpio_reset(DeviceState *dev)
 
     for (uint32_t i = 0; i < sizeof(c_gpio_regs) / sizeof(uint32_t); i++)
     {
-
         regs[i] = 0;
+    }
+
+    for(uint32_t i =0;i<sizeof(s->out)/sizeof(qemu_irq);i++){
+        qemu_irq_lower(s->out[i]);
     }
 
     s->prev_state = 0;
@@ -253,7 +256,7 @@ static void custom_gpio_update_state(CUSTOM_GPIOState *s, uint32_t *update_indic
             }
             else
             {
-                analyze_output_pin(GET_BIT(pin, s->outputs), pin, s);
+                analyze_output_pin(GET_BIT(pin, regs->gpio_state), pin, s);
             }
         }
         memcpy(s->sh_mem_base + 4, regs, sizeof(c_gpio_regs));
@@ -325,8 +328,17 @@ static void analyze_input_pin(uint32_t pin, CUSTOM_GPIOState *s)
         qemu_irq_raise(s->irq);
     }
 };
+
+
+
 static void analyze_output_pin(bool state, uint32_t pin, CUSTOM_GPIOState *s)
 {
-
-    s->regs.gpio_state &= ~((0x1 & state) << pin);
+    // GUI bases on shared memory fragment, but QEMU internals have to see 
+    // actual output line state.
+    if(state){
+        qemu_irq_raise(s->out[pin]);
+    }
+    else{
+        qemu_irq_lower(s->out[pin]);
+    }
 };
